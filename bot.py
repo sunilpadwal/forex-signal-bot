@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 from config import SUPPORTED_TRADES
+from signal_engine import get_best_signal
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -50,7 +51,6 @@ async def pairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Scanning top 10 forex pairs."
     )
 
-
 async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         trade_minutes = int(context.args[0])
@@ -66,17 +66,28 @@ async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    now = datetime.now(IST)
-    entry_time = now + timedelta(minutes=1)
+    await update.message.reply_text(
+        "Scanning forex market..."
+    )
+
+    signal = get_best_signal(trade_minutes)
+
+    if not signal:
+        await update.message.reply_text(
+            "No high probability signal found right now."
+        )
+        return
 
     message = (
         "📊 Forex Signal\n\n"
-        "EUR/USD → BUY ↑ (84%)\n"
-        f"Trade: {trade_minutes}m\n"
-        f"Entry: {entry_time.strftime('%I:%M %p')}"
+        f"{signal['pair']} → {signal['direction']}\n"
+        f"Confidence: {signal['score']}%\n"
+        f"Trade: {signal['trade']}m\n"
+        f"Entry: {signal['entry']}"
     )
 
     await update.message.reply_text(message)
+
 
 
 async def run_bot():
