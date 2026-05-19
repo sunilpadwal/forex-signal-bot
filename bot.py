@@ -1,8 +1,10 @@
 import os
 import asyncio
+import threading
 from datetime import datetime, timedelta
-import pytz
 
+import pytz
+from flask import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -14,6 +16,19 @@ from config import SUPPORTED_TRADES
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# Tiny web server for Render
+web_app = Flask(__name__)
+
+
+@web_app.route("/")
+def home():
+    return "Forex Signal Bot Running ✅"
+
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -24,22 +39,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Commands:\n"
-        "/signals 1\n"
-        "/signals 2\n"
-        "/status\n"
-        "/pairs"
-    )
-
-
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot online ✅\n"
-        "Mode: Manual signals\n"
-        "Timeframe: 1m\n"
-        "Confidence threshold: 80%"
+        "Bot online ✅"
     )
 
 
@@ -77,13 +79,12 @@ async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
-async def main():
-    bot_token = os.getenv("BOT_TOKEN")
-
-    app = Application.builder().token(bot_token).build()
+async def run_bot():
+    app = Application.builder().token(
+        os.getenv("BOT_TOKEN")
+    ).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("pairs", pairs))
     app.add_handler(CommandHandler("signals", signals))
@@ -97,4 +98,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    threading.Thread(target=run_web).start()
+    asyncio.run(run_bot())
