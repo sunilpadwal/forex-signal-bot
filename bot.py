@@ -1,4 +1,5 @@
 import os
+import asyncio
 from datetime import datetime, timedelta
 import pytz
 
@@ -16,7 +17,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Forex Signal Bot is online.\n"
+        "Forex Signal Bot is online.\n\n"
         "Use:\n"
         "/signals 1\n"
         "/signals 2"
@@ -76,7 +77,7 @@ async def signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
-def main():
+async def main():
     bot_token = os.getenv("BOT_TOKEN")
 
     app = Application.builder().token(bot_token).build()
@@ -87,8 +88,13 @@ def main():
     app.add_handler(CommandHandler("pairs", pairs))
     app.add_handler(CommandHandler("signals", signals))
 
-    app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
