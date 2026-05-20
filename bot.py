@@ -173,19 +173,25 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     try:
-        print("Starting bot...")
+        print("🚀 Starting bot...")
 
-        # Start web server for Render
+        if not BOT_TOKEN:
+            raise Exception("BOT_TOKEN missing")
+
+        print("✅ BOT_TOKEN found")
+
+        # Start Render web server
         Thread(target=run_web, daemon=True).start()
-
-        print("Building telegram app...")
+        print("✅ Flask started")
 
         app = ApplicationBuilder().token(BOT_TOKEN).build()
+        print("✅ Telegram app created")
 
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(button_click))
 
-        print("Bot started successfully")
+        print("✅ Handlers added")
+        print("🤖 Bot started...")
 
         app.run_polling(
             drop_pending_updates=True,
@@ -193,7 +199,8 @@ def main():
         )
 
     except Exception as e:
-        print(f"STARTUP ERROR: {e}")
+        print("❌ STARTUP ERROR:")
+        print(str(e))
 
 
 # ==========================================
