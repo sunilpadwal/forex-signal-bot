@@ -1,5 +1,7 @@
 import os
 import shutil
+from threading import Thread
+from flask import Flask
 
 # ==========================================
 # Render / Headless Chrome Fix
@@ -8,24 +10,22 @@ import shutil
 os.environ["DISPLAY"] = ":99"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-# Explicit Chrome path for Render
+# Chrome path (Render)
 os.environ["CHROME_BIN"] = "/usr/bin/google-chrome"
 os.environ["GOOGLE_CHROME_BIN"] = "/usr/bin/google-chrome"
 
-# Check Chrome path in logs
 chrome_path = (
     shutil.which("google-chrome")
     or shutil.which("google-chrome-stable")
 )
 
+print("=" * 50)
 print(f"Chrome path: {chrome_path}")
+print("=" * 50)
 
 # ==========================================
 # Imports
 # ==========================================
-
-from threading import Thread
-from flask import Flask
 
 from quotexpy import Quotex
 from forex_pairs import FOREX_PAIRS
@@ -44,7 +44,7 @@ from telegram.ext import (
 )
 
 # ==========================================
-# Flask app for Render (keeps web service alive)
+# Flask app (Render Web Service)
 # ==========================================
 
 app_web = Flask(__name__)
@@ -52,19 +52,28 @@ app_web = Flask(__name__)
 
 @app_web.route("/")
 def home():
-    return "Bot is running!"
+    return "Forex bot running!"
 
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app_web.run(host="0.0.0.0", port=port)
+
+    print(f"🌐 Flask running on port {port}")
+
+    app_web.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
 
 
 # ==========================================
-# Telegram config
+# Environment Variables
 # ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
+QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 
 
 # ==========================================
@@ -74,15 +83,30 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
-        [InlineKeyboardButton("🔥 Best Signal", callback_data="best")],
-        [InlineKeyboardButton("⚡ 1 Minute", callback_data="1m")],
-        [InlineKeyboardButton("⏱️ 2 Minute", callback_data="2m")],
+        [
+            InlineKeyboardButton(
+                "🔥 Best Signal",
+                callback_data="best"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⚡ 1 Minute",
+                callback_data="1m"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏱️ 2 Minute",
+                callback_data="2m"
+            )
+        ]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "Choose signal mode:",
+        "📊 Choose Signal Mode:",
         reply_markup=reply_markup
     )
 
@@ -91,15 +115,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Button click
 # ==========================================
 
-async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_click(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
     await query.answer()
 
     signal_type = query.data
 
-    # UI message
+    # --------------------------------------
+    # UI
+    # --------------------------------------
+
     if signal_type == "1m":
+
         await query.edit_message_text(
             "⚡ 1 Minute Signal Selected\n\n"
             "🔍 Logging into Quotex...\n"
@@ -107,6 +138,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif signal_type == "2m":
+
         await query.edit_message_text(
             "⏱️ 2 Minute Signal Selected\n\n"
             "🔍 Logging into Quotex...\n"
@@ -114,36 +146,64 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     else:
+
         await query.edit_message_text(
             "🔥 Best Signal Mode\n\n"
             "🔍 Logging into Quotex...\n"
             "⏳ Finding highest probability pair..."
         )
 
-    # Get Quotex credentials
-    email = os.getenv("QUOTEX_EMAIL")
-    password = os.getenv("QUOTEX_PASSWORD")
+    # --------------------------------------
+    # Credentials check
+    # --------------------------------------
 
-    if not email or not password:
+    if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
+
         await query.message.reply_text(
-            "❌ Quotex credentials missing"
+            "❌ Missing Quotex credentials\n\n"
+            "Add:\n"
+            "QUOTEX_EMAIL\n"
+            "QUOTEX_PASSWORD"
         )
         return
 
     try:
+
+        # ----------------------------------
+        # Chrome debug
+        # ----------------------------------
+
+        chrome_exists = (
+            shutil.which("google-chrome")
+            or shutil.which("google-chrome-stable")
+        )
+
+        print(f"Chrome detected: {chrome_exists}")
+
+        if not chrome_exists:
+
+            await query.message.reply_text(
+                "❌ Chrome not installed on Render"
+            )
+            return
+
         await query.message.reply_text(
             "🔐 Connecting to Quotex..."
         )
 
-        # Connect Quotex
+        # ----------------------------------
+        # Login Quotex
+        # ----------------------------------
+
         client = Quotex(
-            email=email,
-            password=password
+            email=QUOTEX_EMAIL,
+            password=QUOTEX_PASSWORD
         )
 
         connected = await client.connect()
 
         if not connected:
+
             await query.message.reply_text(
                 "❌ Quotex login failed"
             )
@@ -151,69 +211,124 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(
             "✅ Logged into Quotex\n"
-            "🔍 Fetching OTC + forex pairs..."
+            "🔍 Fetching OTC + Forex pairs..."
         )
 
-        # Fetch available assets
+        # ----------------------------------
+        # Get assets
+        # ----------------------------------
+
         assets = client.get_available_asset()
 
         available_pairs = []
 
-        # Match with your forex_pairs.py
+        assets_string = str(assets)
+
         for pair in FOREX_PAIRS:
+
             try:
-                if pair in str(assets):
+
+                if pair in assets_string:
                     available_pairs.append(pair)
+
             except Exception:
                 pass
 
         total_pairs = len(available_pairs)
 
-        # No pair found
+        # ----------------------------------
+        # No pairs
+        # ----------------------------------
+
         if total_pairs == 0:
+
             await query.message.reply_text(
-                "❌ No OTC/Forex pair found"
+                "❌ No OTC / Forex pairs found"
             )
             return
 
-        # Send pair list
-        message = "📊 Available Forex + OTC Pairs\n\n"
+        # ----------------------------------
+        # Send results
+        # ----------------------------------
+
+        message = (
+            "📊 Available Forex + OTC Pairs\n\n"
+        )
 
         for pair in available_pairs[:40]:
             message += f"✅ {pair}\n"
 
-        message += f"\n📈 Total Found: {total_pairs}"
+        message += (
+            f"\n📈 Total Found: {total_pairs}"
+        )
 
-        await query.message.reply_text(message)
+        await query.message.reply_text(
+            message
+        )
+
+        print(
+            f"✅ Found {total_pairs} pairs"
+        )
 
     except Exception as e:
+
+        print("ERROR:", str(e))
+
         await query.message.reply_text(
             f"❌ Error:\n{str(e)}"
         )
 
 
 # ==========================================
-# Main bot
+# Main
 # ==========================================
 
 def main():
-    try:
-        print("🚀 Starting bot...")
 
+    try:
+
+        print("=" * 50)
+        print("🚀 Starting Bot")
+        print("=" * 50)
+
+        # Token check
         if not BOT_TOKEN:
-            raise Exception("BOT_TOKEN missing")
+            raise Exception(
+                "BOT_TOKEN missing"
+            )
 
         print("✅ BOT_TOKEN found")
 
-        # Start Render web server
-        Thread(target=run_web, daemon=True).start()
+        # Start Flask
+        Thread(
+            target=run_web,
+            daemon=True
+        ).start()
+
         print("✅ Flask started")
 
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        # Telegram app
+        app = (
+            ApplicationBuilder()
+            .token(BOT_TOKEN)
+            .build()
+        )
+
         print("✅ Telegram app created")
 
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CallbackQueryHandler(button_click))
+        # Handlers
+        app.add_handler(
+            CommandHandler(
+                "start",
+                start
+            )
+        )
+
+        app.add_handler(
+            CallbackQueryHandler(
+                button_click
+            )
+        )
 
         print("✅ Handlers added")
         print("🤖 Bot started...")
@@ -224,7 +339,8 @@ def main():
         )
 
     except Exception as e:
-        print("❌ STARTUP ERROR:")
+
+        print("❌ STARTUP ERROR")
         print(str(e))
 
 
