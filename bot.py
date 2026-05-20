@@ -1,11 +1,16 @@
-import asyncio
-from quotexpy import Quotex
-from forex_pairs import FOREX_PAIRS
 import os
 from threading import Thread
 from flask import Flask
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from quotexpy import Quotex
+from forex_pairs import FOREX_PAIRS
+
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
+
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -13,9 +18,9 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ==========================
-# Flask app for Render
-# ==========================
+# ==========================================
+# Flask app for Render (keeps web service alive)
+# ==========================================
 
 app_web = Flask(__name__)
 
@@ -30,16 +35,16 @@ def run_web():
     app_web.run(host="0.0.0.0", port=port)
 
 
-# ==========================
-# Telegram bot config
-# ==========================
+# ==========================================
+# Telegram config
+# ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
-# ==========================
-# Start command
-# ==========================
+# ==========================================
+# /start command
+# ==========================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -57,15 +62,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ==========================
-# Button click handler
-# ==========================
+# ==========================================
+# Button click
+# ==========================================
+
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
     await query.answer()
 
     signal_type = query.data
 
+    # UI message
     if signal_type == "1m":
         await query.edit_message_text(
             "⚡ 1 Minute Signal Selected\n\n"
@@ -87,6 +95,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⏳ Finding highest probability pair..."
         )
 
+    # Get Quotex credentials
     email = os.getenv("QUOTEX_EMAIL")
     password = os.getenv("QUOTEX_PASSWORD")
 
@@ -101,6 +110,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔐 Connecting to Quotex..."
         )
 
+        # Connect Quotex
         client = Quotex(
             email=email,
             password=password
@@ -115,28 +125,39 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await query.message.reply_text(
-            "✅ Logged into Quotex\n🔍 Fetching OTC + forex pairs..."
+            "✅ Logged into Quotex\n"
+            "🔍 Fetching OTC + forex pairs..."
         )
 
-        assets = await client.get_available_asset()
+        # Fetch available assets
+        assets = client.get_available_asset()
 
         available_pairs = []
 
+        # Match with your forex_pairs.py
         for pair in FOREX_PAIRS:
             try:
                 if pair in str(assets):
                     available_pairs.append(pair)
-            except:
+            except Exception:
                 pass
 
         total_pairs = len(available_pairs)
 
+        # No pair found
+        if total_pairs == 0:
+            await query.message.reply_text(
+                "❌ No OTC/Forex pair found"
+            )
+            return
+
+        # Send pair list
         message = "📊 Available Forex + OTC Pairs\n\n"
 
-        for pair in available_pairs[:30]:
+        for pair in available_pairs[:40]:
             message += f"✅ {pair}\n"
 
-        message += f"\nTotal Found: {total_pairs}"
+        message += f"\n📈 Total Found: {total_pairs}"
 
         await query.message.reply_text(message)
 
@@ -146,15 +167,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ==========================
-# Main bot runner
-# ==========================
+# ==========================================
+# Main bot
+# ==========================================
 
 def main():
 
-    # Start web server for Render
+    # Start tiny Flask server for Render
     Thread(target=run_web).start()
 
+    # Telegram app
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -163,14 +185,14 @@ def main():
     print("Bot started...")
 
     app.run_polling(
-    drop_pending_updates=True,
-    close_loop=False
-)
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 
-# ==========================
-# Run app
-# ==========================
+# ==========================================
+# Run
+# ==========================================
 
 if __name__ == "__main__":
     main()
