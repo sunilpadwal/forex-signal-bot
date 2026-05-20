@@ -60,18 +60,90 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 # Button click handler
 # ==========================
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
-==> Running 'python bot.py'
-Menu
-  File "/opt/render/project/src/bot.py", line 128
-    available_pairs = []
-SyntaxError: expected 'except' or 'finally' block
-==> Exited with status 1
-==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
-==> Running 'python bot.py'
-  File "/opt/render/project/src/bot.py", line 128
-    available_pairs = []
+    signal_type = query.data
+
+    if signal_type == "1m":
+        await query.edit_message_text(
+            "⚡ 1 Minute Signal Selected\n\n"
+            "🔍 Logging into Quotex...\n"
+            "⏳ Looking for fast setup..."
+        )
+
+    elif signal_type == "2m":
+        await query.edit_message_text(
+            "⏱️ 2 Minute Signal Selected\n\n"
+            "🔍 Logging into Quotex...\n"
+            "⏳ Looking for stronger setup..."
+        )
+
+    else:
+        await query.edit_message_text(
+            "🔥 Best Signal Mode\n\n"
+            "🔍 Logging into Quotex...\n"
+            "⏳ Finding highest probability pair..."
+        )
+
+    email = os.getenv("QUOTEX_EMAIL")
+    password = os.getenv("QUOTEX_PASSWORD")
+
+    if not email or not password:
+        await query.message.reply_text(
+            "❌ Quotex credentials missing"
+        )
+        return
+
+    try:
+        await query.message.reply_text(
+            "🔐 Connecting to Quotex..."
+        )
+
+        client = Quotex(
+            email=email,
+            password=password
+        )
+
+        connected = await client.connect()
+
+        if not connected:
+            await query.message.reply_text(
+                "❌ Quotex login failed"
+            )
+            return
+
+        await query.message.reply_text(
+            "✅ Logged into Quotex\n🔍 Fetching OTC + forex pairs..."
+        )
+
+        assets = await client.get_available_asset()
+
+        available_pairs = []
+
+        for pair in FOREX_PAIRS:
+            try:
+                if pair in str(assets):
+                    available_pairs.append(pair)
+            except:
+                pass
+
+        total_pairs = len(available_pairs)
+
+        message = "📊 Available Forex + OTC Pairs\n\n"
+
+        for pair in available_pairs[:30]:
+            message += f"✅ {pair}\n"
+
+        message += f"\nTotal Found: {total_pairs}"
+
+        await query.message.reply_text(message)
+
+    except Exception as e:
+        await query.message.reply_text(
+            f"❌ Error:\n{str(e)}"
+        )
 
 
 # ==========================
