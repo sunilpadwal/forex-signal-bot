@@ -1,4 +1,9 @@
 import os
+
+# Render / headless Chrome fix
+os.environ["DISPLAY"] = ":99"
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 from threading import Thread
 from flask import Flask
 
