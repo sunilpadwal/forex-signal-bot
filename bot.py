@@ -59,37 +59,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
     await query.answer()
 
-    signal_mode = query.data
+    signal_type = query.data
 
-    if signal_mode == "best":
-        message = (
-            "🔥 Best Signal Selected\n\n"
-            "🔍 Scanning Quotex OTC + forex pairs...\n"
-            "⏳ Finding highest probability setup..."
-        )
-
-    elif signal_mode == "1m":
-        message = (
+    if signal_type == "1m":
+        await query.edit_message_text(
             "⚡ 1 Minute Signal Selected\n\n"
-            "🔍 Scanning Quotex OTC + forex pairs...\n"
-            "⏳ Looking for fast setup..."
+            "🔍 Logging into Quotex...\n"
+            "⏳ Scanning OTC + forex pairs..."
         )
 
-    elif signal_mode == "2m":
-        message = (
+    elif signal_type == "2m":
+        await query.edit_message_text(
             "⏱️ 2 Minute Signal Selected\n\n"
-            "🔍 Scanning Quotex OTC + forex pairs...\n"
-            "⏳ Looking for stronger confirmation..."
+            "🔍 Logging into Quotex...\n"
+            "⏳ Scanning OTC + forex pairs..."
         )
 
     else:
-        message = "Invalid option."
+        await query.edit_message_text(
+            "🔥 Best Signal Mode\n\n"
+            "🔍 Logging into Quotex...\n"
+            "⏳ Finding highest probability pair..."
+        )
 
-    await query.edit_message_text(message)
+    # Debug check for environment variables
+    email = os.getenv("QUOTEX_EMAIL")
+    password = os.getenv("QUOTEX_PASSWORD")
+
+    if not email or not password:
+        await query.message.reply_text(
+            "❌ Quotex credentials missing in Render Environment Variables"
+        )
+        return
+
+    await query.message.reply_text(
+        f"✅ Quotex credentials found\n📧 {email}"
+    )
 
 
 # ==========================
