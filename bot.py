@@ -1,6 +1,6 @@
 import asyncio
 from quotexpy import Quotex
-
+from forex_pairs import FOREX_PAIRS
 import os
 from threading import Thread
 from flask import Flask
@@ -123,10 +123,27 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         total_pairs = len(assets)
 
-        await query.message.reply_text(
-            f"✅ Found {total_pairs} tradable pairs\n\n"
-            "🚧 Signal scanner coming next"
-        )
+        assets = await client.get_available_asset()
+
+available_pairs = []
+
+for pair in FOREX_PAIRS:
+    try:
+        if pair in str(assets):
+            available_pairs.append(pair)
+    except:
+        pass
+
+total_pairs = len(available_pairs)
+
+message = "📊 Available Forex + OTC Pairs\n\n"
+
+for pair in available_pairs[:30]:
+    message += f"✅ {pair}\n"
+
+message += f"\nTotal Found: {total_pairs}"
+
+await query.message.reply_text(message)
 
     except Exception as e:
         await query.message.reply_text(
