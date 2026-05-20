@@ -1,8 +1,28 @@
 import os
+import shutil
 
-# Render / headless Chrome fix
+# ==========================================
+# Render / Headless Chrome Fix
+# ==========================================
+
 os.environ["DISPLAY"] = ":99"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+# Explicit Chrome path for Render
+os.environ["CHROME_BIN"] = "/usr/bin/google-chrome"
+os.environ["GOOGLE_CHROME_BIN"] = "/usr/bin/google-chrome"
+
+# Check Chrome path in logs
+chrome_path = (
+    shutil.which("google-chrome")
+    or shutil.which("google-chrome-stable")
+)
+
+print(f"Chrome path: {chrome_path}")
+
+# ==========================================
+# Imports
+# ==========================================
 
 from threading import Thread
 from flask import Flask
