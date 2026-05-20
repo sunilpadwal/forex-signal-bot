@@ -1,3 +1,6 @@
+import asyncio
+from quotexpy import Quotex
+
 import os
 from threading import Thread
 from flask import Flask
@@ -68,14 +71,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "⚡ 1 Minute Signal Selected\n\n"
             "🔍 Logging into Quotex...\n"
-            "⏳ Scanning OTC + forex pairs..."
+            "⏳ Looking for fast setup..."
         )
 
     elif signal_type == "2m":
         await query.edit_message_text(
             "⏱️ 2 Minute Signal Selected\n\n"
             "🔍 Logging into Quotex...\n"
-            "⏳ Scanning OTC + forex pairs..."
+            "⏳ Looking for stronger setup..."
         )
 
     else:
@@ -85,19 +88,50 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⏳ Finding highest probability pair..."
         )
 
-    # Debug check for environment variables
     email = os.getenv("QUOTEX_EMAIL")
     password = os.getenv("QUOTEX_PASSWORD")
 
     if not email or not password:
         await query.message.reply_text(
-            "❌ Quotex credentials missing in Render Environment Variables"
+            "❌ Quotex credentials missing"
         )
         return
 
-    await query.message.reply_text(
-        f"✅ Quotex credentials found\n📧 {email}"
-    )
+    try:
+        await query.message.reply_text(
+            "🔐 Connecting to Quotex..."
+        )
+
+        client = Quotex(
+            email=email,
+            password=password
+        )
+
+        connected = await client.connect()
+
+        if not connected:
+            await query.message.reply_text(
+                "❌ Quotex login failed"
+            )
+            return
+
+        await query.message.reply_text(
+            "✅ Logged into Quotex\n🔍 Fetching OTC + forex pairs..."
+        )
+
+        assets = await client.get_available_asset()
+
+        total_pairs = len(assets)
+
+        await query.message.reply_text(
+            f"✅ Found {total_pairs} tradable pairs\n\n"
+            "🚧 Signal scanner coming next"
+        )
+
+    except Exception as e:
+        await query.message.reply_text(
+            f"❌ Error:\n{str(e)}"
+        )
 
 
 # ==========================
