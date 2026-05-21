@@ -1,352 +1,183 @@
-import os
-import shutil
-from threading import Thread
-from flask import Flask
+import requests
+import pandas as pd
 
-# ==========================================
-# Render / Headless Chrome Fix
-# ==========================================
-
-os.environ["DISPLAY"] = ":99"
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-# Chrome path (Render)
-os.environ["CHROME_BIN"] = "/usr/bin/google-chrome"
-os.environ["GOOGLE_CHROME_BIN"] = "/usr/bin/google-chrome"
-
-chrome_path = (
-    shutil.which("google-chrome")
-    or shutil.which("google-chrome-stable")
+from indicators import (
+    add_indicators,
+    bullish_engulfing,
+    bearish_engulfing,
+    bullish_breakout,
+    bearish_breakout
 )
 
-print("=" * 50)
-print(f"Chrome path: {chrome_path}")
-print("=" * 50)
-
-# ==========================================
-# Imports
-# ==========================================
-
-from quotexpy import Quotex
-from forex_pairs import FOREX_PAIRS
-
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
+from config import (
+    TWELVEDATA_API_KEY,
+    MIN_CONFIDENCE
 )
 
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
 
-# ==========================================
-# Flask app (Render Web Service)
-# ==========================================
+def fetch_data(symbol, interval="1min"):
 
-app_web = Flask(__name__)
-
-
-@app_web.route("/")
-def home():
-    return "Forex bot running!"
-
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-
-    print(f"🌐 Flask running on port {port}")
-
-    app_web.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False
+    url = (
+        "https://api.twelvedata.com/time_series"
     )
 
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": 100,
+        "apikey": TWELVEDATA_API_KEY
+    }
 
-# ==========================================
-# Environment Variables
-# ==========================================
+    response = requests.get(
+        url,
+        params=params,
+        timeout=10
+    )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
-QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
+    data = response.json()
 
+    if "values" not in data:
+        return None
 
-# ==========================================
-# /start command
-# ==========================================
+    df = pd.DataFrame(data["values"])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = df.iloc[::-1].reset_index(drop=True)
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🔥 Best Signal",
-                callback_data="best"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⚡ 1 Minute",
-                callback_data="1m"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⏱️ 2 Minute",
-                callback_data="2m"
-            )
-        ]
+    numeric_cols = [
+        "open",
+        "high",
+        "low",
+        "close"
     ]
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    for col in numeric_cols:
+        df[col] = df[col].astype(float)
 
-    await update.message.reply_text(
-        "📊 Choose Signal Mode:",
-        reply_markup=reply_markup
-    )
+    return df
 
 
-# ==========================================
-# Button click
-# ==========================================
+def analyze_pair(symbol, forced_expiry=None):
 
-async def button_click(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+    df = fetch_data(symbol)
 
-    query = update.callback_query
-    await query.answer()
+    if df is None:
+        return None
 
-    signal_type = query.data
+    df = add_indicators(df)
 
-    # --------------------------------------
-    # UI
-    # --------------------------------------
+    score_buy = 0
+    score_sell = 0
+    reasons = []
 
-    if signal_type == "1m":
+    latest = df.iloc[-1]
 
-        await query.edit_message_text(
-            "⚡ 1 Minute Signal Selected\n\n"
-            "🔍 Logging into Quotex...\n"
-            "⏳ Looking for fast setup..."
-        )
+    # ======================
+    # EMA Trend
+    # ======================
 
-    elif signal_type == "2m":
+    if latest["ema_fast"] > latest["ema_slow"]:
+        score_buy += 20
+        reasons.append("EMA Bullish")
 
-        await query.edit_message_text(
-            "⏱️ 2 Minute Signal Selected\n\n"
-            "🔍 Logging into Quotex...\n"
-            "⏳ Looking for stronger setup..."
-        )
+    else:
+        score_sell += 20
+        reasons.append("EMA Bearish")
+
+    # ======================
+    # MACD
+    # ======================
+
+    if latest["macd"] > latest["macd_signal"]:
+        score_buy += 15
+        reasons.append("MACD Bullish")
+
+    else:
+        score_sell += 15
+        reasons.append("MACD Bearish")
+
+    # ======================
+    # CCI
+    # ======================
+
+    if latest["cci"] > 100:
+        score_buy += 15
+        reasons.append("CCI Strong Bullish")
+
+    elif latest["cci"] < -100:
+        score_sell += 15
+        reasons.append("CCI Strong Bearish")
+
+    # ======================
+    # Bollinger
+    # ======================
+
+    if latest["close"] > latest["bb_middle"]:
+        score_buy += 10
+
+    else:
+        score_sell += 10
+
+    # ======================
+    # Candle Pattern
+    # ======================
+
+    if bullish_engulfing(df):
+        score_buy += 20
+        reasons.append("Bullish Engulfing")
+
+    if bearish_engulfing(df):
+        score_sell += 20
+        reasons.append("Bearish Engulfing")
+
+    # ======================
+    # Price Action
+    # ======================
+
+    if bullish_breakout(df):
+        score_buy += 20
+        reasons.append("Bullish Breakout")
+
+    if bearish_breakout(df):
+        score_sell += 20
+        reasons.append("Bearish Breakout")
+
+    # ======================
+    # Direction
+    # ======================
+
+    if score_buy > score_sell:
+
+        direction = "BUY"
+        confidence = score_buy
 
     else:
 
-        await query.edit_message_text(
-            "🔥 Best Signal Mode\n\n"
-            "🔍 Logging into Quotex...\n"
-            "⏳ Finding highest probability pair..."
-        )
+        direction = "SELL"
+        confidence = score_sell
 
-    # --------------------------------------
-    # Credentials check
-    # --------------------------------------
+    if confidence < MIN_CONFIDENCE:
+        return None
 
-    if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
+    # ======================
+    # Dynamic expiry
+    # ======================
 
-        await query.message.reply_text(
-            "❌ Missing Quotex credentials\n\n"
-            "Add:\n"
-            "QUOTEX_EMAIL\n"
-            "QUOTEX_PASSWORD"
-        )
-        return
+    if forced_expiry:
 
-    try:
+        expiry = forced_expiry
 
-        # ----------------------------------
-        # Chrome debug
-        # ----------------------------------
+    else:
 
-        chrome_exists = (
-            shutil.which("google-chrome")
-            or shutil.which("google-chrome-stable")
-        )
+        if confidence >= 85:
+            expiry = 1
+        else:
+            expiry = 2
 
-        print(f"Chrome detected: {chrome_exists}")
-
-        if not chrome_exists:
-
-            await query.message.reply_text(
-                "❌ Chrome not installed on Render"
-            )
-            return
-
-        await query.message.reply_text(
-            "🔐 Connecting to Quotex..."
-        )
-
-        # ----------------------------------
-        # Login Quotex
-        # ----------------------------------
-
-        client = Quotex(
-            email=QUOTEX_EMAIL,
-            password=QUOTEX_PASSWORD
-        )
-
-        connected = await client.connect()
-
-        if not connected:
-
-            await query.message.reply_text(
-                "❌ Quotex login failed"
-            )
-            return
-
-        await query.message.reply_text(
-            "✅ Logged into Quotex\n"
-            "🔍 Fetching OTC + Forex pairs..."
-        )
-
-        # ----------------------------------
-        # Get assets
-        # ----------------------------------
-
-        assets = client.get_available_asset()
-
-        available_pairs = []
-
-        assets_string = str(assets)
-
-        for pair in FOREX_PAIRS:
-
-            try:
-
-                if pair in assets_string:
-                    available_pairs.append(pair)
-
-            except Exception:
-                pass
-
-        total_pairs = len(available_pairs)
-
-        # ----------------------------------
-        # No pairs
-        # ----------------------------------
-
-        if total_pairs == 0:
-
-            await query.message.reply_text(
-                "❌ No OTC / Forex pairs found"
-            )
-            return
-
-        # ----------------------------------
-        # Send results
-        # ----------------------------------
-
-        message = (
-            "📊 Available Forex + OTC Pairs\n\n"
-        )
-
-        for pair in available_pairs[:40]:
-            message += f"✅ {pair}\n"
-
-        message += (
-            f"\n📈 Total Found: {total_pairs}"
-        )
-
-        await query.message.reply_text(
-            message
-        )
-
-        print(
-            f"✅ Found {total_pairs} pairs"
-        )
-
-    except Exception as e:
-
-        print("ERROR:", str(e))
-
-        await query.message.reply_text(
-            f"❌ Error:\n{str(e)}"
-        )
-
-
-# ==========================================
-# Main
-# ==========================================
-
-def main():
-
-    try:
-
-        print("=" * 50)
-        print("🚀 Starting Bot")
-        print("=" * 50)
-
-        # Token check
-        if not BOT_TOKEN:
-            raise Exception(
-                "BOT_TOKEN missing"
-            )
-
-        print("✅ BOT_TOKEN found")
-
-        # Start Flask
-        Thread(
-            target=run_web,
-            daemon=True
-        ).start()
-
-        print("✅ Flask started")
-
-        # Telegram app
-        app = (
-            ApplicationBuilder()
-            .token(BOT_TOKEN)
-            .build()
-        )
-
-        print("✅ Telegram app created")
-
-        # Handlers
-        app.add_handler(
-            CommandHandler(
-                "start",
-                start
-            )
-        )
-
-        app.add_handler(
-            CallbackQueryHandler(
-                button_click
-            )
-        )
-
-        print("✅ Handlers added")
-        print("🤖 Bot started...")
-
-        app.run_polling(
-            drop_pending_updates=True,
-            close_loop=False
-        )
-
-    except Exception as e:
-
-        print("❌ STARTUP ERROR")
-        print(str(e))
-
-
-# ==========================================
-# Run
-# ==========================================
-
-if __name__ == "__main__":
-    main()
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "confidence": confidence,
+        "expiry": expiry,
+        "entry_price": latest["close"],
+        "reasons": reasons
+    }
