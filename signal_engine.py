@@ -1,226 +1,180 @@
+import time
+import requests
 import pandas as pd
-from ta.trend import EMAIndicator, MACD, CCIIndicator
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
+from datetime import datetime, timedelta
 
 from config import (
-    EMA_FAST,
-    EMA_SLOW,
-    RSI_PERIOD,
-    MACD_FAST,
-    MACD_SLOW,
-    MACD_SIGNAL,
-    CCI_PERIOD,
-    BB_PERIOD,
-    BB_STD,
-    WEIGHTS,
+    BASE_URL,
+    TWELVE_DATA_API_KEY,
+    MIN_CONFIDENCE,
+    SCAN_INTERVAL,
+    MAX_SCAN_PAIRS,
 )
 
+from indicators import (
+    add_indicators,
+    calculate_signal,
+)
+
+from forex_pairs import FOREX_PAIRS
+
 
 # ==========================================
-# Add Indicators
+# Get Candle Data
 # ==========================================
 
-def add_indicators(df: pd.DataFrame):
+def fetch_market_data(symbol, interval="1min", outputsize=100):
 
-    df["ema_fast"] = EMAIndicator(
-        close=df["close"],
-        window=EMA_FAST
-    ).ema_indicator()
+    try:
+        url = (
+            f"{BASE_URL}/time_series"
+            f"?symbol={symbol}"
+            f"&interval={interval}"
+            f"&outputsize={outputsize}"
+            f"&apikey={TWELVE_DATA_API_KEY}"
+        )
 
-    df["ema_slow"] = EMAIndicator(
-        close=df["close"],
-        window=EMA_SLOW
-    ).ema_indicator()
+        response = requests.get(url, timeout=15)
+        data = response.json()
 
-    macd = MACD(
-        close=df["close"],
-        window_fast=MACD_FAST,
-        window_slow=MACD_SLOW,
-        window_sign=MACD_SIGNAL
+        if "values" not in data:
+            return None
+
+        df = pd.DataFrame(data["values"])
+
+        df = df.rename(columns={
+            "datetime": "time"
+        })
+
+        numeric_cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+        ]
+
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col])
+
+        df = df.iloc[::-1].reset_index(drop=True)
+
+        return df
+
+    except Exception as e:
+        print(f"Fetch error {symbol}: {e}")
+        return None
+
+
+# ==========================================
+# Next Minute Entry Timing
+# ==========================================
+
+def get_entry_and_expiry(duration_minutes):
+
+    now = datetime.now()
+
+    next_minute = (
+        now.replace(second=0, microsecond=0)
+        + timedelta(minutes=1)
     )
 
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
-    df["macd_hist"] = macd.macd_diff()
-
-    df["rsi"] = RSIIndicator(
-        close=df["close"],
-        window=RSI_PERIOD
-    ).rsi()
-
-    df["cci"] = CCIIndicator(
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
-        window=CCI_PERIOD
-    ).cci()
-
-    bb = BollingerBands(
-        close=df["close"],
-        window=BB_PERIOD,
-        window_dev=BB_STD
+    expiry = (
+        next_minute
+        + timedelta(minutes=duration_minutes)
     )
 
-    df["bb_high"] = bb.bollinger_hband()
-    df["bb_low"] = bb.bollinger_lband()
-    df["bb_mid"] = bb.bollinger_mavg()
-
-    return df
+    return next_minute, expiry
 
 
 # ==========================================
-# Price Action
+# Scan One Pair
 # ==========================================
 
-def detect_price_action(df):
+def analyze_pair(pair, duration_minutes):
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    interval = "1min"
 
-    bullish = False
-    bearish = False
+    df = fetch_market_data(pair, interval)
 
-    # Momentum candle
-    body = abs(last["close"] - last["open"])
-    candle_range = last["high"] - last["low"]
+    if df is None or len(df) < 50:
+        return None
 
-    if candle_range > 0:
-        body_strength = body / candle_range
-    else:
-        body_strength = 0
+    df = add_indicators(df)
 
-    # Bullish engulfing
-    if (
-        prev["close"] < prev["open"]
-        and last["close"] > last["open"]
-        and last["close"] > prev["open"]
-    ):
-        bullish = True
+    result = calculate_signal(df)
 
-    # Bearish engulfing
-    if (
-        prev["close"] > prev["open"]
-        and last["close"] < last["open"]
-        and last["close"] < prev["open"]
-    ):
-        bearish = True
+    confidence = result["confidence"]
 
-    # Strong momentum candle
-    if body_strength > 0.6:
-        if last["close"] > last["open"]:
-            bullish = True
-        else:
-            bearish = True
+    if confidence < MIN_CONFIDENCE:
+        return None
 
-    return bullish, bearish
-
-
-# ==========================================
-# Signal Score
-# ==========================================
-
-def calculate_signal(df):
-
-    latest = df.iloc[-1]
-
-    buy_score = 0
-    sell_score = 0
-
-    reasons_buy = []
-    reasons_sell = []
-
-    # ======================================
-    # EMA Trend
-    # ======================================
-
-    if latest["ema_fast"] > latest["ema_slow"]:
-        buy_score += WEIGHTS["ema_trend"]
-        reasons_buy.append("EMA uptrend")
-
-    else:
-        sell_score += WEIGHTS["ema_trend"]
-        reasons_sell.append("EMA downtrend")
-
-    # ======================================
-    # MACD
-    # ======================================
-
-    if latest["macd_hist"] > 0:
-        buy_score += WEIGHTS["macd"]
-        reasons_buy.append("MACD bullish")
-
-    else:
-        sell_score += WEIGHTS["macd"]
-        reasons_sell.append("MACD bearish")
-
-    # ======================================
-    # RSI
-    # ======================================
-
-    if latest["rsi"] < 35:
-        buy_score += WEIGHTS["rsi"]
-        reasons_buy.append("RSI oversold")
-
-    elif latest["rsi"] > 65:
-        sell_score += WEIGHTS["rsi"]
-        reasons_sell.append("RSI overbought")
-
-    # ======================================
-    # CCI
-    # ======================================
-
-    if latest["cci"] < -100:
-        buy_score += WEIGHTS["cci"]
-        reasons_buy.append("CCI oversold")
-
-    elif latest["cci"] > 100:
-        sell_score += WEIGHTS["cci"]
-        reasons_sell.append("CCI overbought")
-
-    # ======================================
-    # Bollinger
-    # ======================================
-
-    if latest["close"] <= latest["bb_low"]:
-        buy_score += WEIGHTS["bollinger"]
-        reasons_buy.append("BB lower touch")
-
-    elif latest["close"] >= latest["bb_high"]:
-        sell_score += WEIGHTS["bollinger"]
-        reasons_sell.append("BB upper touch")
-
-    # ======================================
-    # Price Action
-    # ======================================
-
-    bullish, bearish = detect_price_action(df)
-
-    if bullish:
-        buy_score += WEIGHTS["price_action"]
-        reasons_buy.append("Momentum candle")
-
-        buy_score += WEIGHTS["candle_bonus"]
-
-    if bearish:
-        sell_score += WEIGHTS["price_action"]
-        reasons_sell.append("Momentum candle")
-
-        sell_score += WEIGHTS["candle_bonus"]
-
-    # ======================================
-    # Final
-    # ======================================
-
-    if buy_score > sell_score:
-        return {
-            "direction": "BUY",
-            "confidence": buy_score,
-            "reasons": reasons_buy
-        }
+    entry_time, expiry_time = (
+        get_entry_and_expiry(duration_minutes)
+    )
 
     return {
-        "direction": "SELL",
-        "confidence": sell_score,
-        "reasons": reasons_sell
+        "pair": pair,
+        "direction": result["direction"],
+        "confidence": confidence,
+        "reasons": result["reasons"],
+        "duration": duration_minutes,
+        "entry_time": entry_time,
+        "expiry_time": expiry_time,
     }
+
+
+# ==========================================
+# Best Dynamic Signal
+# ==========================================
+
+def find_best_dynamic_signal():
+
+    print("Scanning market...")
+
+    while True:
+
+        best_signal = None
+        best_confidence = 0
+
+        for pair in FOREX_PAIRS[:MAX_SCAN_PAIRS]:
+
+            try:
+
+                signal_1m = analyze_pair(
+                    pair,
+                    duration_minutes=1
+                )
+
+                signal_2m = analyze_pair(
+                    pair,
+                    duration_minutes=2
+                )
+
+                signals = [
+                    signal_1m,
+                    signal_2m
+                ]
+
+                for signal in signals:
+
+                    if not signal:
+                        continue
+
+                    confidence = signal["confidence"]
+
+                    if confidence > best_confidence:
+                        best_confidence = confidence
+                        best_signal = signal
+
+            except Exception as e:
+                print(f"Pair error {pair}: {e}")
+
+        if best_signal:
+            print(
+                f"Best setup found: "
+                f"{best_signal['pair']}"
+            )
+            return best_signal
+
+        print("No strong setup found...")
+        time.sleep(SCAN_INTERVAL)
