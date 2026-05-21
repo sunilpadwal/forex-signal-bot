@@ -1,3 +1,5 @@
 python-telegram-bot==22.1
 Flask==3.1.0
-git+https://github.com/A11ksa/API-Quotex.git
+requests
+pandas
+numpy
