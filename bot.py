@@ -1,42 +1,36 @@
-import asyncio
 import os
-
+import asyncio
 from threading import Thread
-from datetime import datetime, timedelta
-
 from flask import Flask
 
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update
+    Update,
 )
 
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes
+    ContextTypes,
 )
 
-from forex_pairs import FOREX_PAIRS
-from signal_engine import analyze_pair
-from result_tracker import track_result
-from config import (
-    BOT_TOKEN,
-    ENTRY_BUFFER_SECONDS
-)
+from config import BOT_TOKEN
+from signal_engine import find_best_dynamic_signal
+from result_tracker import track_trade_result
 
-# =====================================
-# Flask for Render
-# =====================================
+
+# ==========================================
+# Flask (Render keep alive)
+# ==========================================
 
 app_web = Flask(__name__)
 
 
 @app_web.route("/")
 def home():
-    return "Bot running"
+    return "Forex Signal Bot Running ✅"
 
 
 def run_web():
@@ -50,9 +44,9 @@ def run_web():
     )
 
 
-# =====================================
-# START COMMAND
-# =====================================
+# ==========================================
+# /start
+# ==========================================
 
 async def start(
     update: Update,
@@ -63,36 +57,24 @@ async def start(
         [
             InlineKeyboardButton(
                 "🔥 Best Dynamic",
-                callback_data="best"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⚡ 1 Minute",
-                callback_data="1"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⏱️ 2 Minute",
-                callback_data="2"
+                callback_data="best_dynamic"
             )
         ]
     ]
 
-    markup = InlineKeyboardMarkup(
+    reply_markup = InlineKeyboardMarkup(
         keyboard
     )
 
     await update.message.reply_text(
-        "Choose signal mode:",
-        reply_markup=markup
+        "Choose Signal Mode:",
+        reply_markup=reply_markup
     )
 
 
-# =====================================
-# SIGNAL BUTTON
-# =====================================
+# ==========================================
+# Signal Button
+# ==========================================
 
 async def button_click(
     update: Update,
@@ -102,165 +84,171 @@ async def button_click(
     query = update.callback_query
     await query.answer()
 
-    mode = query.data
-
     await query.edit_message_text(
+        "🔥 Best Dynamic Mode\n\n"
         "🔍 Scanning market...\n"
-        "📊 Checking indicators..."
+        "⏳ Looking for best setup..."
     )
 
-    best_signal = None
+    try:
 
-    for pair in FOREX_PAIRS:
+        signal = await asyncio.to_thread(
+            find_best_dynamic_signal
+        )
 
-        try:
+        if not signal:
 
-            if mode == "1":
-                signal = analyze_pair(
-                    pair,
-                    forced_expiry=1
-                )
+            await query.message.reply_text(
+                "❌ No strong setup found"
+            )
+            return
 
-            elif mode == "2":
-                signal = analyze_pair(
-                    pair,
-                    forced_expiry=2
-                )
+        pair = signal["pair"]
+        direction = signal["direction"]
+        confidence = signal["confidence"]
 
-            else:
-                signal = analyze_pair(pair)
+        entry_time = signal[
+            "entry_time"
+        ].strftime("%H:%M:%S")
 
-            if signal:
+        expiry_time = signal[
+            "expiry_time"
+        ].strftime("%H:%M:%S")
 
-                if (
-                    best_signal is None
-                    or signal["confidence"]
-                    > best_signal["confidence"]
-                ):
-                    best_signal = signal
+        reasons = signal["reasons"]
 
-        except Exception:
-            pass
+        emoji = (
+            "📈"
+            if direction == "BUY"
+            else "📉"
+        )
 
-    if not best_signal:
+        reason_text = (
+            "\n".join(
+                [
+                    f"• {r}"
+                    for r in reasons[:3]
+                ]
+            )
+        )
+
+        signal_message = (
+            f"🚀 SIGNAL READY\n\n"
+            f"Pair: {pair}\n"
+            f"{direction} {emoji}\n\n"
+            f"⏰ Entry Time: "
+            f"{entry_time}\n"
+            f"⏳ Expiry: "
+            f"{expiry_time}\n\n"
+            f"🔥 Confidence: "
+            f"{confidence}%\n\n"
+            f"Reason:\n"
+            f"{reason_text}\n\n"
+            f"Enter at start "
+            f"of next candle."
+        )
 
         await query.message.reply_text(
-            "❌ No strong setup found"
+            signal_message
         )
-        return
 
-    now = datetime.now()
+        # ==================================
+        # PASS / FAIL Tracking
+        # ==================================
 
-    next_minute = (
-        now.replace(
-            second=0,
-            microsecond=0
+        asyncio.create_task(
+            track_trade_result(
+                context.bot,
+                query.message.chat_id,
+                signal
+            )
         )
-        + timedelta(minutes=1)
-    )
 
-    entry_time = (
-        next_minute
-        - timedelta(
-            seconds=ENTRY_BUFFER_SECONDS
+    except Exception as e:
+
+        await query.message.reply_text(
+            f"❌ Error:\n{str(e)}"
         )
-    )
-
-    exit_time = (
-        next_minute
-        + timedelta(
-            minutes=best_signal["expiry"]
-        )
-    )
-
-    reasons_text = "\n".join(
-        [
-            f"✅ {x}"
-            for x
-            in best_signal["reasons"]
-        ]
-    )
-
-    message = (
-
-        f"🚨 SIGNAL FOUND 🚨\n\n"
-
-        f"📊 Pair: "
-        f"{best_signal['symbol']}\n"
-
-        f"📈 Signal: "
-        f"{best_signal['direction']}\n"
-
-        f"🎯 Confidence: "
-        f"{best_signal['confidence']}%\n"
-
-        f"⏳ Expiry: "
-        f"{best_signal['expiry']} Minute\n\n"
-
-        f"⏰ Entry Time:\n"
-        f"{entry_time.strftime('%H:%M:%S')}\n\n"
-
-        f"🏁 Exit Time:\n"
-        f"{exit_time.strftime('%H:%M:%S')}\n\n"
-
-        f"💰 Entry Price:\n"
-        f"{best_signal['entry_price']:.5f}\n\n"
-
-        f"📌 Reasons:\n"
-        f"{reasons_text}"
-    )
-
-    await query.message.reply_text(
-        message
-    )
-
-    asyncio.create_task(
-        track_result(
-            context.bot,
-            query.message.chat.id,
-            best_signal
-        )
-    )
 
 
-# =====================================
-# MAIN
-# =====================================
+# ==========================================
+# Main
+# ==========================================
 
 def main():
 
-    Thread(
-        target=run_web,
-        daemon=True
-    ).start()
+    try:
 
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
+        print(
+            "🚀 Starting bot..."
         )
-    )
 
-    app.add_handler(
-        CallbackQueryHandler(
-            button_click
+        if not BOT_TOKEN:
+            raise Exception(
+                "BOT_TOKEN missing"
+            )
+
+        print(
+            "✅ BOT_TOKEN found"
         )
-    )
 
-    print(
-        "🤖 Bot started..."
-    )
+        Thread(
+            target=run_web,
+            daemon=True
+        ).start()
 
-    app.run_polling(
-        drop_pending_updates=True
-    )
+        print(
+            "✅ Flask started"
+        )
 
+        app = (
+            ApplicationBuilder()
+            .token(BOT_TOKEN)
+            .build()
+        )
+
+        print(
+            "✅ Telegram app created"
+        )
+
+        app.add_handler(
+            CommandHandler(
+                "start",
+                start
+            )
+        )
+
+        app.add_handler(
+            CallbackQueryHandler(
+                button_click
+            )
+        )
+
+        print(
+            "✅ Handlers added"
+        )
+
+        print(
+            "🤖 Bot started..."
+        )
+
+        app.run_polling(
+            drop_pending_updates=True,
+            close_loop=False
+        )
+
+    except Exception as e:
+
+        print(
+            "❌ STARTUP ERROR:"
+        )
+
+        print(str(e))
+
+
+# ==========================================
+# Run
+# ==========================================
 
 if __name__ == "__main__":
     main()
