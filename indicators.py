@@ -1,99 +1,226 @@
 import pandas as pd
-import ta
+from ta.trend import EMAIndicator, MACD, CCIIndicator
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
+
+from config import (
+    EMA_FAST,
+    EMA_SLOW,
+    RSI_PERIOD,
+    MACD_FAST,
+    MACD_SLOW,
+    MACD_SIGNAL,
+    CCI_PERIOD,
+    BB_PERIOD,
+    BB_STD,
+    WEIGHTS,
+)
 
 
-def add_indicators(df):
+# ==========================================
+# Add Indicators
+# ==========================================
 
-    # EMA
-    df["ema_fast"] = ta.trend.EMAIndicator(
+def add_indicators(df: pd.DataFrame):
+
+    df["ema_fast"] = EMAIndicator(
         close=df["close"],
-        window=9
+        window=EMA_FAST
     ).ema_indicator()
 
-    df["ema_slow"] = ta.trend.EMAIndicator(
+    df["ema_slow"] = EMAIndicator(
         close=df["close"],
-        window=21
+        window=EMA_SLOW
     ).ema_indicator()
 
-    # MACD
-    macd = ta.trend.MACD(df["close"])
+    macd = MACD(
+        close=df["close"],
+        window_fast=MACD_FAST,
+        window_slow=MACD_SLOW,
+        window_sign=MACD_SIGNAL
+    )
 
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
+    df["macd_hist"] = macd.macd_diff()
 
-    # CCI
-    df["cci"] = ta.trend.CCIIndicator(
+    df["rsi"] = RSIIndicator(
+        close=df["close"],
+        window=RSI_PERIOD
+    ).rsi()
+
+    df["cci"] = CCIIndicator(
         high=df["high"],
         low=df["low"],
         close=df["close"],
-        window=20
+        window=CCI_PERIOD
     ).cci()
 
-    # Bollinger
-    bb = ta.volatility.BollingerBands(
+    bb = BollingerBands(
         close=df["close"],
-        window=20,
-        window_dev=2
+        window=BB_PERIOD,
+        window_dev=BB_STD
     )
 
-    df["bb_upper"] = bb.bollinger_hband()
-    df["bb_lower"] = bb.bollinger_lband()
-    df["bb_middle"] = bb.bollinger_mavg()
+    df["bb_high"] = bb.bollinger_hband()
+    df["bb_low"] = bb.bollinger_lband()
+    df["bb_mid"] = bb.bollinger_mavg()
 
     return df
 
 
-# ==================================
-# Candle Patterns
-# ==================================
+# ==========================================
+# Price Action
+# ==========================================
 
-def bullish_engulfing(df):
+def detect_price_action(df):
 
-    if len(df) < 2:
-        return False
-
+    last = df.iloc[-1]
     prev = df.iloc[-2]
-    curr = df.iloc[-1]
 
-    return (
+    bullish = False
+    bearish = False
+
+    # Momentum candle
+    body = abs(last["close"] - last["open"])
+    candle_range = last["high"] - last["low"]
+
+    if candle_range > 0:
+        body_strength = body / candle_range
+    else:
+        body_strength = 0
+
+    # Bullish engulfing
+    if (
         prev["close"] < prev["open"]
-        and curr["close"] > curr["open"]
-        and curr["close"] > prev["open"]
-        and curr["open"] < prev["close"]
-    )
+        and last["close"] > last["open"]
+        and last["close"] > prev["open"]
+    ):
+        bullish = True
 
-
-def bearish_engulfing(df):
-
-    if len(df) < 2:
-        return False
-
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
-
-    return (
+    # Bearish engulfing
+    if (
         prev["close"] > prev["open"]
-        and curr["close"] < curr["open"]
-        and curr["open"] > prev["close"]
-        and curr["close"] < prev["open"]
-    )
+        and last["close"] < last["open"]
+        and last["close"] < prev["open"]
+    ):
+        bearish = True
+
+    # Strong momentum candle
+    if body_strength > 0.6:
+        if last["close"] > last["open"]:
+            bullish = True
+        else:
+            bearish = True
+
+    return bullish, bearish
 
 
-# ==================================
-# Price Action Breakout
-# ==================================
+# ==========================================
+# Signal Score
+# ==========================================
 
-def bullish_breakout(df):
+def calculate_signal(df):
 
-    recent_high = df["high"].tail(10).max()
-    current_close = df.iloc[-1]["close"]
+    latest = df.iloc[-1]
 
-    return current_close > recent_high
+    buy_score = 0
+    sell_score = 0
 
+    reasons_buy = []
+    reasons_sell = []
 
-def bearish_breakout(df):
+    # ======================================
+    # EMA Trend
+    # ======================================
 
-    recent_low = df["low"].tail(10).min()
-    current_close = df.iloc[-1]["close"]
+    if latest["ema_fast"] > latest["ema_slow"]:
+        buy_score += WEIGHTS["ema_trend"]
+        reasons_buy.append("EMA uptrend")
 
-    return current_close < recent_low
+    else:
+        sell_score += WEIGHTS["ema_trend"]
+        reasons_sell.append("EMA downtrend")
+
+    # ======================================
+    # MACD
+    # ======================================
+
+    if latest["macd_hist"] > 0:
+        buy_score += WEIGHTS["macd"]
+        reasons_buy.append("MACD bullish")
+
+    else:
+        sell_score += WEIGHTS["macd"]
+        reasons_sell.append("MACD bearish")
+
+    # ======================================
+    # RSI
+    # ======================================
+
+    if latest["rsi"] < 35:
+        buy_score += WEIGHTS["rsi"]
+        reasons_buy.append("RSI oversold")
+
+    elif latest["rsi"] > 65:
+        sell_score += WEIGHTS["rsi"]
+        reasons_sell.append("RSI overbought")
+
+    # ======================================
+    # CCI
+    # ======================================
+
+    if latest["cci"] < -100:
+        buy_score += WEIGHTS["cci"]
+        reasons_buy.append("CCI oversold")
+
+    elif latest["cci"] > 100:
+        sell_score += WEIGHTS["cci"]
+        reasons_sell.append("CCI overbought")
+
+    # ======================================
+    # Bollinger
+    # ======================================
+
+    if latest["close"] <= latest["bb_low"]:
+        buy_score += WEIGHTS["bollinger"]
+        reasons_buy.append("BB lower touch")
+
+    elif latest["close"] >= latest["bb_high"]:
+        sell_score += WEIGHTS["bollinger"]
+        reasons_sell.append("BB upper touch")
+
+    # ======================================
+    # Price Action
+    # ======================================
+
+    bullish, bearish = detect_price_action(df)
+
+    if bullish:
+        buy_score += WEIGHTS["price_action"]
+        reasons_buy.append("Momentum candle")
+
+        buy_score += WEIGHTS["candle_bonus"]
+
+    if bearish:
+        sell_score += WEIGHTS["price_action"]
+        reasons_sell.append("Momentum candle")
+
+        sell_score += WEIGHTS["candle_bonus"]
+
+    # ======================================
+    # Final
+    # ======================================
+
+    if buy_score > sell_score:
+        return {
+            "direction": "BUY",
+            "confidence": buy_score,
+            "reasons": reasons_buy
+        }
+
+    return {
+        "direction": "SELL",
+        "confidence": sell_score,
+        "reasons": reasons_sell
+    }
