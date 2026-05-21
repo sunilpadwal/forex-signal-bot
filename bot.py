@@ -1,183 +1,266 @@
-import requests
-import pandas as pd
+import asyncio
+import os
 
-from indicators import (
-    add_indicators,
-    bullish_engulfing,
-    bearish_engulfing,
-    bullish_breakout,
-    bearish_breakout
+from threading import Thread
+from datetime import datetime, timedelta
+
+from flask import Flask
+
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update
 )
 
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
+
+from forex_pairs import FOREX_PAIRS
+from signal_engine import analyze_pair
+from result_tracker import track_result
 from config import (
-    TWELVEDATA_API_KEY,
-    MIN_CONFIDENCE
+    BOT_TOKEN,
+    ENTRY_BUFFER_SECONDS
 )
 
+# =====================================
+# Flask for Render
+# =====================================
 
-def fetch_data(symbol, interval="1min"):
+app_web = Flask(__name__)
 
-    url = (
-        "https://api.twelvedata.com/time_series"
+
+@app_web.route("/")
+def home():
+    return "Bot running"
+
+
+def run_web():
+    port = int(
+        os.environ.get("PORT", 10000)
     )
 
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "outputsize": 100,
-        "apikey": TWELVEDATA_API_KEY
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=10
+    app_web.run(
+        host="0.0.0.0",
+        port=port
     )
 
-    data = response.json()
 
-    if "values" not in data:
-        return None
+# =====================================
+# START COMMAND
+# =====================================
 
-    df = pd.DataFrame(data["values"])
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    df = df.iloc[::-1].reset_index(drop=True)
-
-    numeric_cols = [
-        "open",
-        "high",
-        "low",
-        "close"
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🔥 Best Dynamic",
+                callback_data="best"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⚡ 1 Minute",
+                callback_data="1"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏱️ 2 Minute",
+                callback_data="2"
+            )
+        ]
     ]
 
-    for col in numeric_cols:
-        df[col] = df[col].astype(float)
+    markup = InlineKeyboardMarkup(
+        keyboard
+    )
 
-    return df
+    await update.message.reply_text(
+        "Choose signal mode:",
+        reply_markup=markup
+    )
 
 
-def analyze_pair(symbol, forced_expiry=None):
+# =====================================
+# SIGNAL BUTTON
+# =====================================
 
-    df = fetch_data(symbol)
+async def button_click(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    if df is None:
-        return None
+    query = update.callback_query
+    await query.answer()
 
-    df = add_indicators(df)
+    mode = query.data
 
-    score_buy = 0
-    score_sell = 0
-    reasons = []
+    await query.edit_message_text(
+        "🔍 Scanning market...\n"
+        "📊 Checking indicators..."
+    )
 
-    latest = df.iloc[-1]
+    best_signal = None
 
-    # ======================
-    # EMA Trend
-    # ======================
+    for pair in FOREX_PAIRS:
 
-    if latest["ema_fast"] > latest["ema_slow"]:
-        score_buy += 20
-        reasons.append("EMA Bullish")
+        try:
 
-    else:
-        score_sell += 20
-        reasons.append("EMA Bearish")
+            if mode == "1":
+                signal = analyze_pair(
+                    pair,
+                    forced_expiry=1
+                )
 
-    # ======================
-    # MACD
-    # ======================
+            elif mode == "2":
+                signal = analyze_pair(
+                    pair,
+                    forced_expiry=2
+                )
 
-    if latest["macd"] > latest["macd_signal"]:
-        score_buy += 15
-        reasons.append("MACD Bullish")
+            else:
+                signal = analyze_pair(pair)
 
-    else:
-        score_sell += 15
-        reasons.append("MACD Bearish")
+            if signal:
 
-    # ======================
-    # CCI
-    # ======================
+                if (
+                    best_signal is None
+                    or signal["confidence"]
+                    > best_signal["confidence"]
+                ):
+                    best_signal = signal
 
-    if latest["cci"] > 100:
-        score_buy += 15
-        reasons.append("CCI Strong Bullish")
+        except Exception:
+            pass
 
-    elif latest["cci"] < -100:
-        score_sell += 15
-        reasons.append("CCI Strong Bearish")
+    if not best_signal:
 
-    # ======================
-    # Bollinger
-    # ======================
+        await query.message.reply_text(
+            "❌ No strong setup found"
+        )
+        return
 
-    if latest["close"] > latest["bb_middle"]:
-        score_buy += 10
+    now = datetime.now()
 
-    else:
-        score_sell += 10
+    next_minute = (
+        now.replace(
+            second=0,
+            microsecond=0
+        )
+        + timedelta(minutes=1)
+    )
 
-    # ======================
-    # Candle Pattern
-    # ======================
+    entry_time = (
+        next_minute
+        - timedelta(
+            seconds=ENTRY_BUFFER_SECONDS
+        )
+    )
 
-    if bullish_engulfing(df):
-        score_buy += 20
-        reasons.append("Bullish Engulfing")
+    exit_time = (
+        next_minute
+        + timedelta(
+            minutes=best_signal["expiry"]
+        )
+    )
 
-    if bearish_engulfing(df):
-        score_sell += 20
-        reasons.append("Bearish Engulfing")
+    reasons_text = "\n".join(
+        [
+            f"✅ {x}"
+            for x
+            in best_signal["reasons"]
+        ]
+    )
 
-    # ======================
-    # Price Action
-    # ======================
+    message = (
 
-    if bullish_breakout(df):
-        score_buy += 20
-        reasons.append("Bullish Breakout")
+        f"🚨 SIGNAL FOUND 🚨\n\n"
 
-    if bearish_breakout(df):
-        score_sell += 20
-        reasons.append("Bearish Breakout")
+        f"📊 Pair: "
+        f"{best_signal['symbol']}\n"
 
-    # ======================
-    # Direction
-    # ======================
+        f"📈 Signal: "
+        f"{best_signal['direction']}\n"
 
-    if score_buy > score_sell:
+        f"🎯 Confidence: "
+        f"{best_signal['confidence']}%\n"
 
-        direction = "BUY"
-        confidence = score_buy
+        f"⏳ Expiry: "
+        f"{best_signal['expiry']} Minute\n\n"
 
-    else:
+        f"⏰ Entry Time:\n"
+        f"{entry_time.strftime('%H:%M:%S')}\n\n"
 
-        direction = "SELL"
-        confidence = score_sell
+        f"🏁 Exit Time:\n"
+        f"{exit_time.strftime('%H:%M:%S')}\n\n"
 
-    if confidence < MIN_CONFIDENCE:
-        return None
+        f"💰 Entry Price:\n"
+        f"{best_signal['entry_price']:.5f}\n\n"
 
-    # ======================
-    # Dynamic expiry
-    # ======================
+        f"📌 Reasons:\n"
+        f"{reasons_text}"
+    )
 
-    if forced_expiry:
+    await query.message.reply_text(
+        message
+    )
 
-        expiry = forced_expiry
+    asyncio.create_task(
+        track_result(
+            context.bot,
+            query.message.chat.id,
+            best_signal
+        )
+    )
 
-    else:
 
-        if confidence >= 85:
-            expiry = 1
-        else:
-            expiry = 2
+# =====================================
+# MAIN
+# =====================================
 
-    return {
-        "symbol": symbol,
-        "direction": direction,
-        "confidence": confidence,
-        "expiry": expiry,
-        "entry_price": latest["close"],
-        "reasons": reasons
-    }
+def main():
+
+    Thread(
+        target=run_web,
+        daemon=True
+    ).start()
+
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            button_click
+        )
+    )
+
+    print(
+        "🤖 Bot started..."
+    )
+
+    app.run_polling(
+        drop_pending_updates=True
+    )
+
+
+if __name__ == "__main__":
+    main()
