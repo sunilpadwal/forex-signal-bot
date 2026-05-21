@@ -2,13 +2,13 @@ services:
   - type: web
     name: forex-signal-bot
     runtime: python
+
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
 
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: QUOTEX_EMAIL
-        sync: false
-      - key: QUOTEX_PASSWORD
+
+      - key: TWELVE_API_KEY
         sync: false
