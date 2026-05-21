@@ -1,99 +1,183 @@
+import requests
 import pandas as pd
-import ta
+
+from indicators import (
+    add_indicators,
+    bullish_engulfing,
+    bearish_engulfing,
+    bullish_breakout,
+    bearish_breakout
+)
+
+from config import (
+    TWELVEDATA_API_KEY,
+    MIN_CONFIDENCE
+)
 
 
-def add_indicators(df):
+def fetch_data(symbol, interval="1min"):
 
-    # EMA
-    df["ema_fast"] = ta.trend.EMAIndicator(
-        close=df["close"],
-        window=9
-    ).ema_indicator()
-
-    df["ema_slow"] = ta.trend.EMAIndicator(
-        close=df["close"],
-        window=21
-    ).ema_indicator()
-
-    # MACD
-    macd = ta.trend.MACD(df["close"])
-
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
-
-    # CCI
-    df["cci"] = ta.trend.CCIIndicator(
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
-        window=20
-    ).cci()
-
-    # Bollinger
-    bb = ta.volatility.BollingerBands(
-        close=df["close"],
-        window=20,
-        window_dev=2
+    url = (
+        "https://api.twelvedata.com/time_series"
     )
 
-    df["bb_upper"] = bb.bollinger_hband()
-    df["bb_lower"] = bb.bollinger_lband()
-    df["bb_middle"] = bb.bollinger_mavg()
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": 100,
+        "apikey": TWELVEDATA_API_KEY
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=10
+    )
+
+    data = response.json()
+
+    if "values" not in data:
+        return None
+
+    df = pd.DataFrame(data["values"])
+
+    df = df.iloc[::-1].reset_index(drop=True)
+
+    numeric_cols = [
+        "open",
+        "high",
+        "low",
+        "close"
+    ]
+
+    for col in numeric_cols:
+        df[col] = df[col].astype(float)
 
     return df
 
 
-# ==================================
-# Candle Patterns
-# ==================================
+def analyze_pair(symbol, forced_expiry=None):
 
-def bullish_engulfing(df):
+    df = fetch_data(symbol)
 
-    if len(df) < 2:
-        return False
+    if df is None:
+        return None
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
+    df = add_indicators(df)
 
-    return (
-        prev["close"] < prev["open"]
-        and curr["close"] > curr["open"]
-        and curr["close"] > prev["open"]
-        and curr["open"] < prev["close"]
-    )
+    score_buy = 0
+    score_sell = 0
+    reasons = []
 
+    latest = df.iloc[-1]
 
-def bearish_engulfing(df):
+    # ======================
+    # EMA Trend
+    # ======================
 
-    if len(df) < 2:
-        return False
+    if latest["ema_fast"] > latest["ema_slow"]:
+        score_buy += 20
+        reasons.append("EMA Bullish")
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
+    else:
+        score_sell += 20
+        reasons.append("EMA Bearish")
 
-    return (
-        prev["close"] > prev["open"]
-        and curr["close"] < curr["open"]
-        and curr["open"] > prev["close"]
-        and curr["close"] < prev["open"]
-    )
+    # ======================
+    # MACD
+    # ======================
 
+    if latest["macd"] > latest["macd_signal"]:
+        score_buy += 15
+        reasons.append("MACD Bullish")
 
-# ==================================
-# Price Action Breakout
-# ==================================
+    else:
+        score_sell += 15
+        reasons.append("MACD Bearish")
 
-def bullish_breakout(df):
+    # ======================
+    # CCI
+    # ======================
 
-    recent_high = df["high"].tail(10).max()
-    current_close = df.iloc[-1]["close"]
+    if latest["cci"] > 100:
+        score_buy += 15
+        reasons.append("CCI Strong Bullish")
 
-    return current_close > recent_high
+    elif latest["cci"] < -100:
+        score_sell += 15
+        reasons.append("CCI Strong Bearish")
 
+    # ======================
+    # Bollinger
+    # ======================
 
-def bearish_breakout(df):
+    if latest["close"] > latest["bb_middle"]:
+        score_buy += 10
 
-    recent_low = df["low"].tail(10).min()
-    current_close = df.iloc[-1]["close"]
+    else:
+        score_sell += 10
 
-    return current_close < recent_low
+    # ======================
+    # Candle Pattern
+    # ======================
+
+    if bullish_engulfing(df):
+        score_buy += 20
+        reasons.append("Bullish Engulfing")
+
+    if bearish_engulfing(df):
+        score_sell += 20
+        reasons.append("Bearish Engulfing")
+
+    # ======================
+    # Price Action
+    # ======================
+
+    if bullish_breakout(df):
+        score_buy += 20
+        reasons.append("Bullish Breakout")
+
+    if bearish_breakout(df):
+        score_sell += 20
+        reasons.append("Bearish Breakout")
+
+    # ======================
+    # Direction
+    # ======================
+
+    if score_buy > score_sell:
+
+        direction = "BUY"
+        confidence = score_buy
+
+    else:
+
+        direction = "SELL"
+        confidence = score_sell
+
+    if confidence < MIN_CONFIDENCE:
+        return None
+
+    # ======================
+    # Dynamic expiry
+    # ======================
+
+    if forced_expiry:
+
+        expiry = forced_expiry
+
+    else:
+
+        if confidence >= 85:
+            expiry = 1
+        else:
+            expiry = 2
+
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "confidence": confidence,
+        "expiry": expiry,
+        "entry_price": latest["close"],
+        "reasons": reasons
+    }
