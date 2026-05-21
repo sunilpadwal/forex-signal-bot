@@ -1,53 +1,171 @@
-import time
-from datetime import datetime, timedelta
+import asyncio
+import requests
+from datetime import datetime
 
-from signal_engine import fetch_data
+from config import (
+    BASE_URL,
+    TWELVE_DATA_API_KEY,
+    PIP_MULTIPLIER,
+)
 
 
-async def track_result(
+# ==========================================
+# Get latest price
+# ==========================================
+
+def get_live_price(symbol):
+
+    try:
+        url = (
+            f"{BASE_URL}/price"
+            f"?symbol={symbol}"
+            f"&apikey={TWELVE_DATA_API_KEY}"
+        )
+
+        response = requests.get(
+            url,
+            timeout=15
+        )
+
+        data = response.json()
+
+        if "price" not in data:
+            return None
+
+        return float(data["price"])
+
+    except Exception as e:
+        print(
+            f"Price fetch error "
+            f"{symbol}: {e}"
+        )
+        return None
+
+
+# ==========================================
+# Result tracking
+# ==========================================
+
+async def track_trade_result(
     bot,
     chat_id,
     signal
 ):
 
-    symbol = signal["symbol"]
-    expiry = signal["expiry"]
-    direction = signal["direction"]
+    try:
 
-    entry_price = signal["entry_price"]
+        pair = signal["pair"]
+        direction = signal["direction"]
 
-    # wait until expiry ends
-    wait_seconds = expiry * 60
+        entry_time = signal["entry_time"]
+        expiry_time = signal["expiry_time"]
 
-    time.sleep(wait_seconds)
+        # ==================================
+        # Wait for entry
+        # ==================================
 
-    df = fetch_data(symbol)
+        now = datetime.now()
 
-    if df is None:
+        wait_entry = (
+            entry_time - now
+        ).total_seconds()
+
+        if wait_entry > 0:
+            await asyncio.sleep(wait_entry)
+
+        # Entry price
+        entry_price = get_live_price(pair)
+
+        if entry_price is None:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"❌ Could not fetch "
+                    f"entry price for {pair}"
+                )
+            )
+            return
+
+        # ==================================
+        # Wait for expiry
+        # ==================================
+
+        now = datetime.now()
+
+        wait_expiry = (
+            expiry_time - now
+        ).total_seconds()
+
+        if wait_expiry > 0:
+            await asyncio.sleep(wait_expiry)
+
+        exit_price = get_live_price(pair)
+
+        if exit_price is None:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"❌ Could not fetch "
+                    f"exit price for {pair}"
+                )
+            )
+            return
+
+        # ==================================
+        # Result logic
+        # ==================================
+
+        if direction == "BUY":
+
+            passed = (
+                exit_price > entry_price
+            )
+
+            pip_move = (
+                (exit_price - entry_price)
+                * PIP_MULTIPLIER
+            )
+
+        else:
+
+            passed = (
+                exit_price < entry_price
+            )
+
+            pip_move = (
+                (entry_price - exit_price)
+                * PIP_MULTIPLIER
+            )
+
+        status = (
+            "✅ RESULT: PASS"
+            if passed
+            else "❌ RESULT: FAIL"
+        )
+
+        emoji = (
+            "📈"
+            if direction == "BUY"
+            else "📉"
+        )
+
+        message = (
+            f"{status}\n\n"
+            f"Pair: {pair}\n"
+            f"{direction} {emoji}\n\n"
+            f"Entry: {entry_price:.5f}\n"
+            f"Exit: {exit_price:.5f}\n\n"
+            f"Profit Move: "
+            f"{pip_move:+.1f} pips"
+        )
+
         await bot.send_message(
             chat_id=chat_id,
-            text="❌ Failed to fetch result data"
+            text=message
         )
-        return
 
-    exit_price = float(
-        df.iloc[-1]["close"]
-    )
+    except Exception as e:
 
-    if direction == "BUY":
-        passed = exit_price > entry_price
-    else:
-        passed = exit_price < entry_price
-
-    result = "✅ PASS" if passed else "❌ FAIL"
-
-    await bot.send_message(
-        chat_id=chat_id,
-        text=(
-            f"{result}\n\n"
-            f"📊 Pair: {symbol}\n"
-            f"📈 Direction: {direction}\n\n"
-            f"💰 Entry Price: {entry_price:.5f}\n"
-            f"🏁 Exit Price: {exit_price:.5f}"
+        print(
+            f"Result tracker error: {e}"
         )
-    )
