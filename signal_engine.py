@@ -1,65 +1,99 @@
-from datetime import datetime, timedelta
-import random
-
-import pytz
-import yfinance as yf
-
-from forex_pairs import FOREX_PAIRS
-
-IST = pytz.timezone("Asia/Kolkata")
+import pandas as pd
+import ta
 
 
-def get_best_signal(trade_minutes=1):
-    best_signal = None
-    best_score = 0
+def add_indicators(df):
 
-    for pair in FOREX_PAIRS:
-        try:
-            data = yf.download(
-                pair,
-                period="1d",
-                interval="1m",
-                progress=False
-            )
+    # EMA
+    df["ema_fast"] = ta.trend.EMAIndicator(
+        close=df["close"],
+        window=9
+    ).ema_indicator()
 
-            if data.empty or len(data) < 30:
-                continue
+    df["ema_slow"] = ta.trend.EMAIndicator(
+        close=df["close"],
+        window=21
+    ).ema_indicator()
 
-            close_prices = data["Close"].tolist()
+    # MACD
+    macd = ta.trend.MACD(df["close"])
 
-            last_price = close_prices[-1]
-            avg_5 = sum(close_prices[-5:]) / 5
-            avg_20 = sum(close_prices[-20:]) / 20
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
 
-            direction = "BUY ↑" if avg_5 > avg_20 else "SELL ↓"
+    # CCI
+    df["cci"] = ta.trend.CCIIndicator(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        window=20
+    ).cci()
 
-            score = 70
+    # Bollinger
+    bb = ta.volatility.BollingerBands(
+        close=df["close"],
+        window=20,
+        window_dev=2
+    )
 
-            if abs(avg_5 - avg_20) / last_price > 0.0002:
-                score += 10
+    df["bb_upper"] = bb.bollinger_hband()
+    df["bb_lower"] = bb.bollinger_lband()
+    df["bb_middle"] = bb.bollinger_mavg()
 
-            score += random.randint(0, 15)
+    return df
 
-            if score < 80:
-                continue
 
-            if score > best_score:
-                best_score = score
+# ==================================
+# Candle Patterns
+# ==================================
 
-                entry_time = (
-                    datetime.now(IST)
-                    + timedelta(minutes=1)
-                ).strftime("%I:%M %p")
+def bullish_engulfing(df):
 
-                best_signal = {
-                    "pair": pair.replace("=X", ""),
-                    "direction": direction,
-                    "score": score,
-                    "entry": entry_time,
-                    "trade": trade_minutes
-                }
+    if len(df) < 2:
+        return False
 
-        except Exception:
-            continue
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
 
-    return best_signal
+    return (
+        prev["close"] < prev["open"]
+        and curr["close"] > curr["open"]
+        and curr["close"] > prev["open"]
+        and curr["open"] < prev["close"]
+    )
+
+
+def bearish_engulfing(df):
+
+    if len(df) < 2:
+        return False
+
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+
+    return (
+        prev["close"] > prev["open"]
+        and curr["close"] < curr["open"]
+        and curr["open"] > prev["close"]
+        and curr["close"] < prev["open"]
+    )
+
+
+# ==================================
+# Price Action Breakout
+# ==================================
+
+def bullish_breakout(df):
+
+    recent_high = df["high"].tail(10).max()
+    current_close = df.iloc[-1]["close"]
+
+    return current_close > recent_high
+
+
+def bearish_breakout(df):
+
+    recent_low = df["low"].tail(10).min()
+    current_close = df.iloc[-1]["close"]
+
+    return current_close < recent_low
