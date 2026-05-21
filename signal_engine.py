@@ -168,7 +168,7 @@ def analyze_pair(symbol, forced_expiry=None):
 
     else:
 
-        if confidence >= 85:
+        if confidence >= 70:
             expiry = 1
         else:
             expiry = 2
