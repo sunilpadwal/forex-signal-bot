@@ -10,5 +10,5 @@ services:
       - key: BOT_TOKEN
         sync: false
 
-      - key: TWELVE_API_KEY
+      - key: TWELVEDATA_API_KEY
         sync: false
