@@ -1,5 +1,6 @@
 import os
 import asyncio
+
 from threading import Thread
 from flask import Flask
 
@@ -17,9 +18,12 @@ from telegram.ext import (
 )
 
 from config import BOT_TOKEN
-from signal_engine import find_best_dynamic_signal
-from result_tracker import track_trade_result
-
+from signal_engine import (
+    find_best_dynamic_signal
+)
+from result_tracker import (
+    track_trade_result
+)
 
 # ==========================================
 # Flask (Render keep alive)
@@ -30,12 +34,19 @@ app_web = Flask(__name__)
 
 @app_web.route("/")
 def home():
-    return "Forex Signal Bot Running ✅"
+    return (
+        "Forex Signal Bot "
+        "Running ✅"
+    )
 
 
 def run_web():
+
     port = int(
-        os.environ.get("PORT", 10000)
+        os.environ.get(
+            "PORT",
+            10000
+        )
     )
 
     app_web.run(
@@ -57,23 +68,27 @@ async def start(
         [
             InlineKeyboardButton(
                 "🔥 Best Dynamic",
-                callback_data="best_dynamic"
+                callback_data=(
+                    "best_dynamic"
+                )
             )
         ]
     ]
 
-    reply_markup = InlineKeyboardMarkup(
-        keyboard
+    markup = (
+        InlineKeyboardMarkup(
+            keyboard
+        )
     )
 
     await update.message.reply_text(
         "Choose Signal Mode:",
-        reply_markup=reply_markup
+        reply_markup=markup
     )
 
 
 # ==========================================
-# Signal Button
+# Button Click
 # ==========================================
 
 async def button_click(
@@ -81,65 +96,94 @@ async def button_click(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    query = update.callback_query
+    query = (
+        update.callback_query
+    )
+
     await query.answer()
 
     await query.edit_message_text(
         "🔥 Best Dynamic Mode\n\n"
         "🔍 Scanning market...\n"
-        "⏳ Looking for best setup..."
+        "⏳ Looking for "
+        "highest probability "
+        "setup..."
     )
 
     try:
 
-        signal = await asyncio.to_thread(
-            find_best_dynamic_signal
+        signal = (
+            await asyncio.to_thread(
+                find_best_dynamic_signal
+            )
         )
 
         if not signal:
 
             await query.message.reply_text(
-                "❌ No strong setup found"
+                "❌ No strong "
+                "setup found"
             )
+
             return
 
         pair = signal["pair"]
-        direction = signal["direction"]
-        confidence = signal["confidence"]
 
-        entry_time = signal[
-            "entry_time"
-        ].strftime("%H:%M:%S")
+        direction = signal[
+            "direction"
+        ]
 
-        expiry_time = signal[
-            "expiry_time"
-        ].strftime("%H:%M:%S")
+        confidence = signal[
+            "confidence"
+        ]
 
-        reasons = signal["reasons"]
+        duration = signal[
+            "duration"
+        ]
+
+        entry_time = (
+            signal[
+                "entry_time"
+            ].strftime(
+                "%H:%M:%S"
+            )
+        )
+
+        expiry_time = (
+            signal[
+                "expiry_time"
+            ].strftime(
+                "%H:%M:%S"
+            )
+        )
+
+        reasons = signal[
+            "reasons"
+        ]
 
         emoji = (
             "📈"
-            if direction == "BUY"
+            if direction
+            == "BUY"
             else "📉"
         )
 
-        reason_text = (
-            "\n".join(
-                [
-                    f"• {r}"
-                    for r in reasons[:3]
-                ]
-            )
-        )
+        reason_text = "\n".join([
+            f"• {r}"
+            for r in reasons[:4]
+        ])
 
         signal_message = (
             f"🚀 SIGNAL READY\n\n"
             f"Pair: {pair}\n"
-            f"{direction} {emoji}\n\n"
+            f"{direction} "
+            f"{emoji}\n\n"
             f"⏰ Entry Time: "
             f"{entry_time}\n"
-            f"⏳ Expiry: "
-            f"{expiry_time}\n\n"
+            f"⌛ Expiry Time: "
+            f"{expiry_time}\n"
+            f"🕒 Duration: "
+            f"{duration}m\n\n"
             f"🔥 Confidence: "
             f"{confidence}%\n\n"
             f"Reason:\n"
@@ -153,7 +197,7 @@ async def button_click(
         )
 
         # ==================================
-        # PASS / FAIL Tracking
+        # Start PASS / FAIL tracker
         # ==================================
 
         asyncio.create_task(
@@ -167,7 +211,8 @@ async def button_click(
     except Exception as e:
 
         await query.message.reply_text(
-            f"❌ Error:\n{str(e)}"
+            f"❌ Error:\n"
+            f"{str(e)}"
         )
 
 
@@ -184,6 +229,7 @@ def main():
         )
 
         if not BOT_TOKEN:
+
             raise Exception(
                 "BOT_TOKEN missing"
             )
@@ -192,6 +238,7 @@ def main():
             "✅ BOT_TOKEN found"
         )
 
+        # Flask thread
         Thread(
             target=run_web,
             daemon=True
@@ -208,7 +255,8 @@ def main():
         )
 
         print(
-            "✅ Telegram app created"
+            "✅ Telegram "
+            "app created"
         )
 
         app.add_handler(
