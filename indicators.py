@@ -13,7 +13,7 @@ from config import (
     CCI_PERIOD,
     BB_PERIOD,
     BB_STD,
-    WEIGHTS,
+    WEIGHTS
 )
 
 
@@ -21,8 +21,9 @@ from config import (
 # Add Indicators
 # ==========================================
 
-def add_indicators(df: pd.DataFrame):
+def add_indicators(df):
 
+    # EMA
     df["ema_fast"] = EMAIndicator(
         close=df["close"],
         window=EMA_FAST
@@ -33,6 +34,7 @@ def add_indicators(df: pd.DataFrame):
         window=EMA_SLOW
     ).ema_indicator()
 
+    # MACD
     macd = MACD(
         close=df["close"],
         window_fast=MACD_FAST,
@@ -44,11 +46,13 @@ def add_indicators(df: pd.DataFrame):
     df["macd_signal"] = macd.macd_signal()
     df["macd_hist"] = macd.macd_diff()
 
+    # RSI
     df["rsi"] = RSIIndicator(
         close=df["close"],
         window=RSI_PERIOD
     ).rsi()
 
+    # CCI
     df["cci"] = CCIIndicator(
         high=df["high"],
         low=df["low"],
@@ -56,6 +60,7 @@ def add_indicators(df: pd.DataFrame):
         window=CCI_PERIOD
     ).cci()
 
+    # Bollinger Bands
     bb = BollingerBands(
         close=df["close"],
         window=BB_PERIOD,
@@ -75,20 +80,25 @@ def add_indicators(df: pd.DataFrame):
 
 def detect_price_action(df):
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
     bullish = False
     bearish = False
 
-    # Momentum candle
-    body = abs(last["close"] - last["open"])
-    candle_range = last["high"] - last["low"]
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    if candle_range > 0:
-        body_strength = body / candle_range
-    else:
-        body_strength = 0
+    candle_body = abs(
+        last["close"] - last["open"]
+    )
+
+    candle_range = (
+        last["high"] - last["low"]
+    )
+
+    body_strength = (
+        candle_body / candle_range
+        if candle_range > 0
+        else 0
+    )
 
     # Bullish engulfing
     if (
@@ -107,9 +117,11 @@ def detect_price_action(df):
         bearish = True
 
     # Strong momentum candle
-    if body_strength > 0.6:
+    if body_strength > 0.60:
+
         if last["close"] > last["open"]:
             bullish = True
+
         else:
             bearish = True
 
@@ -117,7 +129,7 @@ def detect_price_action(df):
 
 
 # ==========================================
-# Signal Score
+# Signal Engine
 # ==========================================
 
 def calculate_signal(df):
@@ -135,92 +147,151 @@ def calculate_signal(df):
     # ======================================
 
     if latest["ema_fast"] > latest["ema_slow"]:
-        buy_score += WEIGHTS["ema_trend"]
-        reasons_buy.append("EMA uptrend")
+
+        buy_score += WEIGHTS["ema"]
+        reasons_buy.append(
+            "EMA bullish trend"
+        )
 
     else:
-        sell_score += WEIGHTS["ema_trend"]
-        reasons_sell.append("EMA downtrend")
+
+        sell_score += WEIGHTS["ema"]
+        reasons_sell.append(
+            "EMA bearish trend"
+        )
 
     # ======================================
     # MACD
     # ======================================
 
     if latest["macd_hist"] > 0:
+
         buy_score += WEIGHTS["macd"]
-        reasons_buy.append("MACD bullish")
+        reasons_buy.append(
+            "MACD bullish"
+        )
 
     else:
+
         sell_score += WEIGHTS["macd"]
-        reasons_sell.append("MACD bearish")
+        reasons_sell.append(
+            "MACD bearish"
+        )
 
     # ======================================
     # RSI
     # ======================================
 
     if latest["rsi"] < 35:
+
         buy_score += WEIGHTS["rsi"]
-        reasons_buy.append("RSI oversold")
+        reasons_buy.append(
+            "RSI oversold"
+        )
 
     elif latest["rsi"] > 65:
+
         sell_score += WEIGHTS["rsi"]
-        reasons_sell.append("RSI overbought")
+        reasons_sell.append(
+            "RSI overbought"
+        )
 
     # ======================================
     # CCI
     # ======================================
 
     if latest["cci"] < -100:
+
         buy_score += WEIGHTS["cci"]
-        reasons_buy.append("CCI oversold")
+        reasons_buy.append(
+            "CCI oversold"
+        )
 
     elif latest["cci"] > 100:
+
         sell_score += WEIGHTS["cci"]
-        reasons_sell.append("CCI overbought")
+        reasons_sell.append(
+            "CCI overbought"
+        )
 
     # ======================================
     # Bollinger
     # ======================================
 
     if latest["close"] <= latest["bb_low"]:
-        buy_score += WEIGHTS["bollinger"]
-        reasons_buy.append("BB lower touch")
+
+        buy_score += WEIGHTS[
+            "bollinger"
+        ]
+
+        reasons_buy.append(
+            "Lower BB touch"
+        )
 
     elif latest["close"] >= latest["bb_high"]:
-        sell_score += WEIGHTS["bollinger"]
-        reasons_sell.append("BB upper touch")
+
+        sell_score += WEIGHTS[
+            "bollinger"
+        ]
+
+        reasons_sell.append(
+            "Upper BB touch"
+        )
 
     # ======================================
     # Price Action
     # ======================================
 
-    bullish, bearish = detect_price_action(df)
+    bullish, bearish = (
+        detect_price_action(df)
+    )
 
     if bullish:
-        buy_score += WEIGHTS["price_action"]
-        reasons_buy.append("Momentum candle")
 
-        buy_score += WEIGHTS["candle_bonus"]
+        buy_score += WEIGHTS[
+            "price_action"
+        ]
+
+        buy_score += WEIGHTS[
+            "candle_bonus"
+        ]
+
+        reasons_buy.append(
+            "Bullish momentum"
+        )
 
     if bearish:
-        sell_score += WEIGHTS["price_action"]
-        reasons_sell.append("Momentum candle")
 
-        sell_score += WEIGHTS["candle_bonus"]
+        sell_score += WEIGHTS[
+            "price_action"
+        ]
+
+        sell_score += WEIGHTS[
+            "candle_bonus"
+        ]
+
+        reasons_sell.append(
+            "Bearish momentum"
+        )
 
     # ======================================
-    # Final
+    # Final Decision
     # ======================================
 
-    if buy_score > sell_score:
+    if buy_score >= sell_score:
+
         return {
             "direction": "BUY",
-            "confidence": buy_score,
+            "confidence": int(
+                buy_score
+            ),
             "reasons": reasons_buy
         }
 
     return {
         "direction": "SELL",
-        "confidence": sell_score,
+        "confidence": int(
+            sell_score
+        ),
         "reasons": reasons_sell
     }
