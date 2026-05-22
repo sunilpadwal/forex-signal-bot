@@ -1,180 +1,311 @@
 import time
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+
+from datetime import (
+    datetime,
+    timedelta
+)
 
 from config import (
     BASE_URL,
-    TWELVE_DATA_API_KEY,
+    FCS_API_KEY,
     MIN_CONFIDENCE,
     SCAN_INTERVAL,
     MAX_SCAN_PAIRS,
+    SUPPORTED_EXPIRIES,
 )
 
 from indicators import (
     add_indicators,
-    calculate_signal,
+    calculate_signal
 )
 
-from forex_pairs import FOREX_PAIRS
+from forex_pairs import (
+    FOREX_PAIRS
+)
 
 
 # ==========================================
-# Get Candle Data
+# Symbol Fix
+# EUR/USD -> EURUSD
 # ==========================================
 
-def fetch_market_data(symbol, interval="1min", outputsize=100):
+def format_symbol(symbol):
+
+    symbol = symbol.replace("/", "")
+    symbol = symbol.replace("_", "")
+
+    return symbol.upper()
+
+
+# ==========================================
+# Fetch Candle Data
+# ==========================================
+
+def fetch_market_data(
+    symbol,
+    period="1m"
+):
 
     try:
-        url = (
-            f"{BASE_URL}/time_series"
-            f"?symbol={symbol}"
-            f"&interval={interval}"
-            f"&outputsize={outputsize}"
-            f"&apikey={TWELVE_DATA_API_KEY}"
+
+        symbol = format_symbol(
+            symbol
         )
 
-        response = requests.get(url, timeout=15)
+        url = (
+            f"{BASE_URL}/forex/history"
+            f"?symbol={symbol}"
+            f"&period={period}"
+            f"&access_key={FCS_API_KEY}"
+        )
+
+        response = requests.get(
+            url,
+            timeout=15
+        )
+
         data = response.json()
 
-        if "values" not in data:
+        if (
+            not data.get("status")
+            or "response"
+            not in data
+        ):
             return None
 
-        df = pd.DataFrame(data["values"])
+        candles = []
 
-        df = df.rename(columns={
-            "datetime": "time"
-        })
+        response_data = (
+            data["response"]
+        )
 
-        numeric_cols = [
-            "open",
-            "high",
-            "low",
-            "close",
-        ]
+        for _, candle in (
+            response_data.items()
+        ):
 
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col])
+            candles.append({
+                "open": float(
+                    candle["o"]
+                ),
+                "high": float(
+                    candle["h"]
+                ),
+                "low": float(
+                    candle["l"]
+                ),
+                "close": float(
+                    candle["c"]
+                ),
+                "time": candle["tm"]
+            })
 
-        df = df.iloc[::-1].reset_index(drop=True)
+        df = pd.DataFrame(
+            candles
+        )
+
+        if len(df) < 50:
+            return None
 
         return df
 
     except Exception as e:
-        print(f"Fetch error {symbol}: {e}")
+
+        print(
+            f"Fetch error "
+            f"{symbol}: {e}"
+        )
+
         return None
 
 
 # ==========================================
-# Next Minute Entry Timing
+# Entry / Expiry Timing
 # ==========================================
 
-def get_entry_and_expiry(duration_minutes):
+def get_trade_timing(
+    expiry_minutes
+):
 
     now = datetime.now()
 
-    next_minute = (
-        now.replace(second=0, microsecond=0)
-        + timedelta(minutes=1)
+    entry_time = (
+        now.replace(
+            second=0,
+            microsecond=0
+        )
+        + timedelta(
+            minutes=1
+        )
     )
 
-    expiry = (
-        next_minute
-        + timedelta(minutes=duration_minutes)
+    expiry_time = (
+        entry_time
+        + timedelta(
+            minutes=expiry_minutes
+        )
     )
 
-    return next_minute, expiry
+    return (
+        entry_time,
+        expiry_time
+    )
 
 
 # ==========================================
-# Scan One Pair
+# Analyze One Pair
 # ==========================================
 
-def analyze_pair(pair, duration_minutes):
+def analyze_pair(
+    pair,
+    expiry_minutes
+):
 
-    interval = "1min"
+    try:
 
-    df = fetch_market_data(pair, interval)
+        df = fetch_market_data(
+            pair,
+            period="1m"
+        )
 
-    if df is None or len(df) < 50:
+        if (
+            df is None
+            or len(df) < 50
+        ):
+            return None
+
+        df = add_indicators(df)
+
+        signal = calculate_signal(
+            df
+        )
+
+        confidence = signal[
+            "confidence"
+        ]
+
+        if (
+            confidence
+            < MIN_CONFIDENCE
+        ):
+            return None
+
+        (
+            entry_time,
+            expiry_time
+        ) = get_trade_timing(
+            expiry_minutes
+        )
+
+        return {
+            "pair": pair,
+            "direction":
+                signal[
+                    "direction"
+                ],
+            "confidence":
+                confidence,
+            "reasons":
+                signal[
+                    "reasons"
+                ],
+            "duration":
+                expiry_minutes,
+            "entry_time":
+                entry_time,
+            "expiry_time":
+                expiry_time,
+        }
+
+    except Exception as e:
+
+        print(
+            f"Analyze error "
+            f"{pair}: {e}"
+        )
+
         return None
 
-    df = add_indicators(df)
-
-    result = calculate_signal(df)
-
-    confidence = result["confidence"]
-
-    if confidence < MIN_CONFIDENCE:
-        return None
-
-    entry_time, expiry_time = (
-        get_entry_and_expiry(duration_minutes)
-    )
-
-    return {
-        "pair": pair,
-        "direction": result["direction"],
-        "confidence": confidence,
-        "reasons": result["reasons"],
-        "duration": duration_minutes,
-        "entry_time": entry_time,
-        "expiry_time": expiry_time,
-    }
-
 
 # ==========================================
-# Best Dynamic Signal
+# Best Dynamic Mode
+# Auto choose 1m or 2m
 # ==========================================
 
 def find_best_dynamic_signal():
 
-    print("Scanning market...")
+    print(
+        "Scanning market..."
+    )
 
     while True:
 
         best_signal = None
-        best_confidence = 0
+        best_score = 0
 
-        for pair in FOREX_PAIRS[:MAX_SCAN_PAIRS]:
+        for pair in (
+            FOREX_PAIRS[
+                :MAX_SCAN_PAIRS
+            ]
+        ):
 
             try:
 
-                signal_1m = analyze_pair(
-                    pair,
-                    duration_minutes=1
-                )
+                for expiry in (
+                    SUPPORTED_EXPIRIES
+                ):
 
-                signal_2m = analyze_pair(
-                    pair,
-                    duration_minutes=2
-                )
-
-                signals = [
-                    signal_1m,
-                    signal_2m
-                ]
-
-                for signal in signals:
+                    signal = (
+                        analyze_pair(
+                            pair,
+                            expiry
+                        )
+                    )
 
                     if not signal:
                         continue
 
-                    confidence = signal["confidence"]
+                    confidence = (
+                        signal[
+                            "confidence"
+                        ]
+                    )
 
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_signal = signal
+                    if (
+                        confidence
+                        > best_score
+                    ):
+
+                        best_score = (
+                            confidence
+                        )
+
+                        best_signal = (
+                            signal
+                        )
 
             except Exception as e:
-                print(f"Pair error {pair}: {e}")
+
+                print(
+                    f"Pair error "
+                    f"{pair}: {e}"
+                )
 
         if best_signal:
+
             print(
-                f"Best setup found: "
+                f"Best signal "
                 f"{best_signal['pair']}"
             )
+
             return best_signal
 
-        print("No strong setup found...")
-        time.sleep(SCAN_INTERVAL)
+        print(
+            "No strong setup "
+            "found..."
+        )
+
+        time.sleep(
+            SCAN_INTERVAL
+        )
